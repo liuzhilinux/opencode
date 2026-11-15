@@ -1,20 +1,32 @@
 import { TextareaRenderable } from "@opentui/core"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { DIALOG_INSET, DialogFooter, DialogHeader, useDialog, type DialogSize } from "./dialog"
+import { DialogFooter, DialogHeader, DialogLayout, useDialog, type DialogSize } from "./dialog"
 import { Show, createEffect, createSignal, onMount, type JSX } from "solid-js"
 import { Spinner } from "../component/spinner"
-import { useConfig } from "../config"
+import { useCursorStyle } from "../config"
 import { useRenderer } from "@opentui/solid"
+
+export type DialogPromptAction = {
+  title: string
+  /** Keymap command id, bound while the prompt input is focused and shown in the footer. */
+  command: string
+  /** Keymap command title, e.g. for help listings. Defaults to `title`. */
+  commandTitle?: string
+  onTrigger: (prompt: { setValue: (value: string) => void }) => void
+}
 
 export type DialogPromptProps = {
   title: string
   size?: DialogSize
+  /** Muted line below the title, under the "new-designs" experiment. */
+  subtitle?: string
   description?: () => JSX.Element
   placeholder?: string
   value?: string
   busy?: boolean
   busyText?: string
+  actions?: DialogPromptAction[]
   onConfirm?: (value: string) => void
   onCancel?: () => void
 }
@@ -23,7 +35,7 @@ export function DialogPrompt(props: DialogPromptProps) {
   const dialog = useDialog()
   const renderer = useRenderer()
   const theme = useTheme().surface("dialog")
-  const config = useConfig().data
+  const cursorStyle = useCursorStyle()
   const [textareaTarget, setTextareaTarget] = createSignal<TextareaRenderable>()
   let textarea: TextareaRenderable
 
@@ -31,6 +43,21 @@ export function DialogPrompt(props: DialogPromptProps) {
     if (props.busy) return
     props.onConfirm?.(textarea.plainText)
   }
+
+  const handle = {
+    setValue(value: string) {
+      textarea.setText(value)
+      textarea.gotoLineEnd()
+    },
+  }
+
+  const extraActions = () =>
+    (props.actions ?? []).map((action) => ({
+      title: action.title,
+      command: action.command,
+      disabled: props.busy,
+      onTrigger: () => action.onTrigger(handle),
+    }))
 
   Keymap.createLayer(() => ({
     mode: "modal",
@@ -45,6 +72,12 @@ export function DialogPrompt(props: DialogPromptProps) {
         group: "Dialog",
         run: confirm,
       },
+      ...(props.actions ?? []).map((action) => ({
+        id: action.command,
+        title: action.commandTitle ?? action.title,
+        group: "Dialog",
+        run: () => action.onTrigger(handle),
+      })),
     ],
   }))
 
@@ -95,13 +128,35 @@ export function DialogPrompt(props: DialogPromptProps) {
   })
 
   return (
-    <box paddingLeft={DIALOG_INSET} paddingRight={DIALOG_INSET} gap={1}>
-      <DialogHeader
-        title={props.title}
-        onClose={() => {
-          if (!props.busy) (props.onCancel ?? dialog.clear)()
-        }}
-      />
+    <DialogLayout
+      footerGap={2}
+      header={
+        <DialogHeader
+          title={props.title}
+          description={props.subtitle}
+          onClose={() => {
+            if (!props.busy) (props.onCancel ?? dialog.clear)()
+          }}
+        />
+      }
+      footer={{
+        actions: {
+          primary: [
+            ...extraActions(),
+            { title: "submit", command: "dialog.prompt.submit", disabled: props.busy, onTrigger: confirm },
+          ],
+        },
+      }}
+      legacyFooter={
+        <Show when={!props.busy} fallback={<text fg={theme.text.muted}>processing…</text>}>
+          <DialogFooter
+            actions={{
+              secondary: [{ title: "submit", command: "dialog.prompt.submit", onTrigger: confirm }, ...extraActions()],
+            }}
+          />
+        </Show>
+      }
+    >
       <box gap={1}>
         {props.description?.()}
         <textarea
@@ -117,17 +172,12 @@ export function DialogPrompt(props: DialogPromptProps) {
           textColor={props.busy ? theme.text.formfield.disabled : theme.text.formfield.base}
           focusedTextColor={props.busy ? theme.text.formfield.disabled : theme.text.formfield.base}
           cursorColor={props.busy ? theme.background.formfield.disabled : theme.text.base}
-          cursorStyle={config.cursor}
+          cursorStyle={cursorStyle()}
         />
         <Show when={props.busy}>
           <Spinner color={theme.text.muted}>{props.busyText ?? "Working…"}</Spinner>
         </Show>
       </box>
-      <box paddingBottom={1} flexDirection="row">
-        <Show when={!props.busy} fallback={<text fg={theme.text.muted}>processing…</text>}>
-          <DialogFooter actions={[{ title: "submit", command: "dialog.prompt.submit", onTrigger: confirm }]} />
-        </Show>
-      </box>
-    </box>
+    </DialogLayout>
   )
 }
